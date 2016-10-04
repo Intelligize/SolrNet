@@ -89,8 +89,10 @@ namespace SolrNet {
         /// </summary>
         /// <typeparam name="T">Document type</typeparam>
         /// <param name="serverURL">Solr URL (i.e. "http://localhost:8983/solr")</param>
-        public static void Init<T>(string serverURL) {
-            var connection = new SolrConnection(serverURL) {
+        public static void Init<T>(string serverURL, int timeOut)
+        {
+            var connection = new SolrConnection(serverURL, timeOut)
+            {
                 //Cache = Container.GetInstance<ISolrCache>(),
             };
 

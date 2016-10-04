@@ -25,6 +25,7 @@ using HttpWebAdapters.Adapters;
 using SolrNet.Exceptions;
 using SolrNet.Utils;
 using HttpUtility = SolrNet.Utils.HttpUtility;
+using System.Configuration;
 
 namespace SolrNet.Impl {
     /// <summary>
@@ -33,6 +34,7 @@ namespace SolrNet.Impl {
     public class SolrConnection : ISolrConnection {
         private string serverURL;
         private string version = "2.2";
+        private static string timeOutString = ConfigurationManager.AppSettings["SOLRQueryTimeoutValue"];
 
         /// <summary>
         /// HTTP cache implementation
@@ -48,9 +50,10 @@ namespace SolrNet.Impl {
         /// Manages HTTP connection with Solr
         /// </summary>
         /// <param name="serverURL">URL to Solr</param>
-        public SolrConnection(string serverURL) {
+        public SolrConnection(string serverURL, int timeOut = Int32.MaxValue)
+        {
             ServerURL = serverURL;
-            Timeout = -1;
+            Timeout = timeOut;
             Cache = new NullCache();
             HttpWebRequestFactory = new HttpWebRequestFactory();
         }
@@ -127,45 +130,81 @@ namespace SolrNet.Impl {
                 output.Write(buffer, 0, read);
         }
 
-        public string Get(string relativeUrl, IEnumerable<KeyValuePair<string, string>> parameters) {
+        public string Get(string relativeUrl, IEnumerable<KeyValuePair<string, string>> parameters)
+        {
             var u = new UriBuilder(serverURL);
             u.Path += relativeUrl;
-            u.Query = GetQuery(parameters);
-
-            var request = HttpWebRequestFactory.Create(u.Uri);
-            request.Method = HttpWebRequestMethod.GET;
+            var request = (HttpWebRequest)WebRequest.Create(u.Uri);
+            request.Method = "POST";
+            request.ContentType = "application/x-www-form-urlencoded";
+            var qs = string.Join("&", parameters
+                .Select(kv => string.Format("{0}={1}", HttpUtility.UrlEncode(kv.Key), HttpUtility.UrlEncode(kv.Value)))
+                .ToArray());
+            request.ContentLength = Encoding.UTF8.GetByteCount(qs);
+            request.ProtocolVersion = HttpVersion.Version11;
             request.KeepAlive = true;
-            request.AutomaticDecompression = DecompressionMethods.Deflate | DecompressionMethods.GZip;
+            int _Timeout = Int32.MaxValue;
+            if (Int32.TryParse(timeOutString, out _Timeout) == false)
+            {
+                _Timeout = Int32.MaxValue;
+            }
+            request.Timeout = _Timeout;
 
-            var cached = Cache[u.Uri.ToString()];
-            if (cached != null) {
-                request.Headers.Add(HttpRequestHeader.IfNoneMatch, cached.ETag);
+            try
+            {
+                using (var postParams = request.GetRequestStream())
+                using (var sw = new StreamWriter(postParams))
+                    sw.Write(qs);
+                using (var response = request.GetResponse())
+                using (var responseStream = response.GetResponseStream())
+                using (var sr = new StreamReader(responseStream, Encoding.UTF8, true))
+                    return sr.ReadToEnd();
             }
-            if (Timeout > 0) {
-                request.ReadWriteTimeout = Timeout;
-                request.Timeout = Timeout;                
-            }
-            try {
-                var response = GetResponse(request);
-                if (response.ETag != null)
-                    Cache.Add(new SolrCacheEntity(u.Uri.ToString(), response.ETag, response.Data));
-                return response.Data;
-            } catch (WebException e) {
-                if (e.Response != null) {
-                    using (e.Response) {
-                        var r = new HttpWebResponseAdapter(e.Response);
-                        if (r.StatusCode == HttpStatusCode.NotModified) {
-                            return cached.Data;
-                        }
-                        using (var s = e.Response.GetResponseStream())
-                        using (var sr = new StreamReader(s)) {
-                            throw new SolrConnectionException(sr.ReadToEnd(), e, u.Uri.ToString());
-                        }
-                    }
-                }
-                throw new SolrConnectionException(e, u.Uri.ToString());
+            catch (WebException e)
+            {
+                throw new SolrConnectionException(e);
             }
         }
+
+        //public string Get(string relativeUrl, IEnumerable<KeyValuePair<string, string>> parameters) {
+        //    var u = new UriBuilder(serverURL);
+        //    u.Path += relativeUrl;
+        //    u.Query = GetQuery(parameters);
+
+        //    var request = HttpWebRequestFactory.Create(u.Uri);
+        //    request.Method = HttpWebRequestMethod.GET;
+        //    request.KeepAlive = true;
+        //    request.AutomaticDecompression = DecompressionMethods.Deflate | DecompressionMethods.GZip;
+
+        //    var cached = Cache[u.Uri.ToString()];
+        //    if (cached != null) {
+        //        request.Headers.Add(HttpRequestHeader.IfNoneMatch, cached.ETag);
+        //    }
+        //    if (Timeout > 0) {
+        //        request.ReadWriteTimeout = Timeout;
+        //        request.Timeout = Timeout;                
+        //    }
+        //    try {
+        //        var response = GetResponse(request);
+        //        if (response.ETag != null)
+        //            Cache.Add(new SolrCacheEntity(u.Uri.ToString(), response.ETag, response.Data));
+        //        return response.Data;
+        //    } catch (WebException e) {
+        //        if (e.Response != null) {
+        //            using (e.Response) {
+        //                var r = new HttpWebResponseAdapter(e.Response);
+        //                if (r.StatusCode == HttpStatusCode.NotModified) {
+        //                    return cached.Data;
+        //                }
+        //                using (var s = e.Response.GetResponseStream())
+        //                using (var sr = new StreamReader(s)) {
+        //                    throw new SolrConnectionException(sr.ReadToEnd(), e, u.Uri.ToString());
+        //                }
+        //            }
+        //        }
+        //        throw new SolrConnectionException(e, u.Uri.ToString());
+        //    }
+        //}
 
         /// <summary>
         /// Gets the Query 
